@@ -1,5 +1,8 @@
 numpy
-scipy
 pandas
+scipy
+tqdm
+ipywidgets
+matplotlib
 praw
 xmltodict
