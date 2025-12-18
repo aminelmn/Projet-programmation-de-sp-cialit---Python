@@ -119,44 +119,54 @@ class SearchEngine:
             q = q / norm
         return q
 
-    def search(self, keywords: str, top_n: int = 10, use_tfidf: bool = True) -> pd.DataFrame:
-        """
-        TD7: returns a pandas DataFrame.
-        Similarity: cosine similarity with doc vectors.
-        """
-        if self.N == 0:
-            return pd.DataFrame(columns=["doc_id", "score", "titre", "auteur", "date", "type", "url"])
+    def search(self, keywords: str, top_n: int = 10, use_tfidf: bool = True, show_progress: bool = False) -> pd.DataFrame:
+    """
+    TD7: returns a pandas DataFrame of best results.
+    TD8 2.3: if show_progress=True, uses tqdm to show progress during scoring loop.
+    """
+    from tqdm import tqdm
 
-        q = self._query_vector(keywords, use_tfidf=use_tfidf)
-        if q is None:
-            return pd.DataFrame(columns=["doc_id", "score", "titre", "auteur", "date", "type", "url"])
+    if self.N == 0:
+        return pd.DataFrame(columns=["doc_id", "score", "titre", "auteur", "date", "type", "url"])
 
-        mat = self.mat_TFxIDF if use_tfidf else self.mat_TF
+    q = self._query_vector(keywords, use_tfidf=use_tfidf)
+    if q is None:
+        return pd.DataFrame(columns=["doc_id", "score", "titre", "auteur", "date", "type", "url"])
 
-        # cosine: dot( doc_normed , q_normed )
-        # normalize docs row-wise
-        doc_norms = np.sqrt(mat.multiply(mat).sum(axis=1)).A1
-        doc_norms[doc_norms == 0] = 1.0
+    mat = self.mat_TFxIDF if use_tfidf else self.mat_TF
+
+    # normalize docs for cosine similarity
+    import numpy as np
+    doc_norms = np.sqrt(mat.multiply(mat).sum(axis=1)).A1
+    doc_norms[doc_norms == 0] = 1.0
+
+    scores = np.zeros(self.N, dtype=float)
+
+    if show_progress:
+        # loop scoring with tqdm (TD8 requirement)
+        for i in tqdm(range(self.N), desc="Searching"):
+            row = mat.getrow(i)
+            # cosine similarity: (row·q) / ||row||
+            scores[i] = (row.dot(q) / doc_norms[i]).sum()
+    else:
+        # fast vectorized
         mat_normed = mat.multiply(1.0 / doc_norms[:, None])
+        scores = np.asarray(mat_normed.dot(q)).ravel()
 
-        scores = mat_normed.dot(q)
-        scores = np.asarray(scores).ravel()
+    order = np.argsort(-scores)[:top_n]
 
-        # rank
-        order = np.argsort(-scores)[:top_n]
+    rows = []
+    for i in order:
+        doc_id = self.doc_ids[i]
+        doc = self.corpus.id2doc[doc_id]
+        rows.append({
+            "doc_id": doc_id,
+            "score": float(scores[i]),
+            "titre": doc.titre,
+            "auteur": doc.auteur,
+            "date": doc.date.isoformat(),
+            "type": doc.getType(),
+            "url": doc.url,
+        })
 
-        rows = []
-        for i in order:
-            doc_id = self.doc_ids[i]
-            doc = self.corpus.id2doc[doc_id]
-            rows.append({
-                "doc_id": doc_id,
-                "score": float(scores[i]),
-                "titre": doc.titre,
-                "auteur": doc.auteur,
-                "date": doc.date.isoformat(),
-                "type": doc.getType(),
-                "url": doc.url,
-            })
-
-        return pd.DataFrame(rows)
+    return pd.DataFrame(rows)
