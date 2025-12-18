@@ -8,51 +8,41 @@ from Document import Document
 from text_utils import split_sentences
 
 
-def build_corpus_from_us_speeches_csv(
-    csv_path: str,
+def build_corpus_from_discours_us(
+    path: str,
     corpus_name: str = "Discours US",
-    text_col: str = "text",
-    author_col: str = "author",
-    date_col: str = "date",
-    url_col: str | None = None,
     limit_rows: int | None = None,
 ) -> Corpus:
     """
-    TD8: load speeches CSV, split speeches into sentences -> each sentence becomes a Document.
+    TD8: load discours_US.csv (tab-separated), split each speech into sentences,
+    each sentence becomes a Document.
     """
-    df = pd.read_csv(csv_path)
+    df = pd.read_csv(path, sep="\t", engine="python")
     if limit_rows is not None:
         df = df.head(limit_rows)
 
     corpus = Corpus(corpus_name)
 
     for _, row in tqdm(df.iterrows(), total=len(df), desc="Building corpus (sentences)"):
-        speech = str(row.get(text_col, "") or "")
-        author = str(row.get(author_col, "unknown") or "unknown")
-        url = str(row.get(url_col, "")) if url_col else ""
+        speaker = str(row.get("speaker", "unknown") or "unknown")
+        speech = str(row.get("text", "") or "")
+        descr = str(row.get("descr", "") or "").strip()
+        link = str(row.get("link", "") or "").strip()
 
-        # date -> datetime
-        raw_date = row.get(date_col, "")
-        dt = None
-        if isinstance(raw_date, datetime):
-            dt = raw_date
-        else:
-            s = str(raw_date).strip()
-            # try ISO first, else fallback
+        # date
+        raw_date = str(row.get("date", "") or "").strip()
+        dt = datetime.now()
+        for fmt in ("%B %d, %Y", "%b %d, %Y"):
             try:
-                dt = datetime.fromisoformat(s.replace("Z", ""))
-            except Exception:
-                # common fallback
-                try:
-                    dt = datetime.strptime(s[:10], "%Y-%m-%d")
-                except Exception:
-                    dt = datetime.now()
+                dt = datetime.strptime(raw_date, fmt)
+                break
+            except ValueError:
+                pass
 
-        # split into sentences
         sentences = split_sentences(speech)
         for i, sent in enumerate(sentences):
-            titre = f"Speech sentence #{i+1}"
-            doc = Document(titre=titre, auteur=author, date=dt, url=url, texte=sent)
+            titre = descr if descr else f"Speech sentence #{i+1}"
+            doc = Document(titre=titre, auteur=speaker, date=dt, url=link, texte=sent)
             corpus.add_document(doc)
 
     return corpus
