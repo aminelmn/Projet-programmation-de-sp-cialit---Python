@@ -1,3 +1,5 @@
-praw
+numpy
+scipy
 pandas
+praw
 xmltodict
