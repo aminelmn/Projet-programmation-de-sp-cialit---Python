@@ -1,36 +1,28 @@
 # Corpus.py
-from __future__ import annotations
 
+import re
 import pickle
-import json
-from typing import Optional, Dict, Any, List
-
 import pandas as pd
+from typing import Dict, Optional, List, Tuple
+from datetime import datetime
 
 from Author import Author
-from Document import Document, RedditDocument, ArxivDocument, _to_datetime
+from Document import Document, RedditDocument, ArxivDocument
 
 
 class Corpus:
-    """Gestion d'un corpus (TD4) + mise à jour TD5."""
-
-    # Singleton (TD5 part 4.1)
-    _singleton_instance: Optional["Corpus"] = None
-
-    @classmethod
-    def get_instance(cls, nom: str = "Corpus") -> "Corpus":
-        if cls._singleton_instance is None:
-            cls._singleton_instance = cls(nom)
-        return cls._singleton_instance
-
     def __init__(self, nom: str):
-        self.nom: str = nom
+        self.nom = nom
         self.authors: Dict[str, Author] = {}
         self.id2doc: Dict[int, Document] = {}
-        self.ndoc: int = 0
-        self.naut: int = 0
-        self._next_id: int = 0  # TD4 1.3
+        self.ndoc = 0
+        self.naut = 0
+        self._next_id = 0
 
+        # TD6 cache: concatenated corpus string
+        self._all_text_cache: Optional[str] = None
+
+    # TD4/TD5: add documents
     def add_document(self, document: Document) -> int:
         doc_id = self._next_id
         self._next_id += 1
@@ -38,20 +30,21 @@ class Corpus:
         self.id2doc[doc_id] = document
         self.ndoc = len(self.id2doc)
 
-        auteur_nom = document.auteur
-        if auteur_nom not in self.authors:
-            self.authors[auteur_nom] = Author(auteur_nom)
+        a = document.auteur
+        if a not in self.authors:
+            self.authors[a] = Author(a)
             self.naut = len(self.authors)
+        self.authors[a].add(doc_id, document)
 
-        self.authors[auteur_nom].add(doc_id, document)
+        # invalidate cache
+        self._all_text_cache = None
         return doc_id
 
-    # TD4 3.2
+    # TD4: sorting display
     def afficher_par_date(self, n: Optional[int] = None) -> None:
         items = sorted(self.id2doc.items(), key=lambda kv: kv[1].date)
         if n is None:
             n = len(items)
-        print(f"=== Corpus '{self.nom}' — tri par date ===")
         for doc_id, doc in items[:n]:
             print(f"{doc.date.date()} (id={doc_id}) -> {doc}")
 
@@ -59,20 +52,16 @@ class Corpus:
         items = sorted(self.id2doc.items(), key=lambda kv: kv[1].titre.lower())
         if n is None:
             n = len(items)
-        print(f"=== Corpus '{self.nom}' — tri par titre ===")
         for doc_id, doc in items[:n]:
             print(f"{doc.titre} (id={doc_id}) -> {doc}")
 
-    def __repr__(self) -> str:
-        return f"Corpus(nom={self.nom!r}, ndoc={self.ndoc}, naut={self.naut})"
-
-    # TD4 3.3
+    # Save/Load (TD4)
     def to_dataframe(self) -> pd.DataFrame:
-        rows: List[Dict[str, Any]] = []
+        rows = []
         for doc_id, doc in self.id2doc.items():
-            row: Dict[str, Any] = {
+            row = {
                 "id": doc_id,
-                "type": doc.getType(),          # TD5 3.2
+                "type": doc.getType(),
                 "titre": doc.titre,
                 "auteur": doc.auteur,
                 "date": doc.date.isoformat(),
@@ -89,64 +78,23 @@ class Corpus:
     def save(self, filename: str, format_type: str = "csv") -> None:
         format_type = format_type.lower()
         if format_type == "csv":
-            df = self.to_dataframe()
-            df.to_csv(filename, sep="\t", index=False)
+            self.to_dataframe().to_csv(filename, sep="\t", index=False)
         elif format_type == "pickle":
             with open(filename, "wb") as f:
                 pickle.dump(self, f)
-        elif format_type == "json":
-            payload = {
-                "nom": self.nom,
-                "documents": [
-                    {
-                        "id": doc_id,
-                        "type": doc.getType(),
-                        "titre": doc.titre,
-                        "auteur": doc.auteur,
-                        "date": doc.date.isoformat(),
-                        "url": doc.url,
-                        "texte": doc.texte,
-                        "nb_commentaires": getattr(doc, "nb_commentaires", None),
-                        "co_auteurs": getattr(doc, "co_auteurs", None),
-                    }
-                    for doc_id, doc in self.id2doc.items()
-                ],
-            }
-            with open(filename, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2)
         else:
-            raise ValueError("format_type doit être 'csv', 'pickle' ou 'json'")
+            raise ValueError("format_type must be 'csv' or 'pickle'")
 
     @classmethod
     def load(cls, nom: str, filename: str, format_type: str = "csv") -> "Corpus":
         format_type = format_type.lower()
-
         if format_type == "pickle":
             with open(filename, "rb") as f:
                 return pickle.load(f)
 
-        if format_type == "json":
-            with open(filename, "r", encoding="utf-8") as f:
-                payload = json.load(f)
-            corpus = cls(payload.get("nom", nom))
-            for d in payload.get("documents", []):
-                doc_type = (d.get("type") or "Document")
-                titre = d.get("titre", "")
-                auteur = d.get("auteur", "")
-                date_val = _to_datetime(d.get("date"))
-                url = d.get("url", "")
-                texte = d.get("texte", "")
-                if doc_type == "Reddit":
-                    doc = RedditDocument(titre, auteur, date_val, url, texte, nb_commentaires=int(d.get("nb_commentaires") or 0))
-                elif doc_type == "Arxiv":
-                    co = d.get("co_auteurs") or []
-                    doc = ArxivDocument(titre, auteur, date_val, url, texte, co_auteurs=co)
-                else:
-                    doc = Document(titre, auteur, date_val, url, texte)
-                corpus.add_document(doc)
-            return corpus
+        if format_type != "csv":
+            raise ValueError("format_type must be 'csv' or 'pickle'")
 
-        # CSV/TSV
         df = pd.read_csv(filename, sep="\t")
         corpus = cls(nom)
 
@@ -154,20 +102,139 @@ class Corpus:
             doc_type = str(row.get("type", "Document"))
             titre = str(row.get("titre", ""))
             auteur = str(row.get("auteur", ""))
-            date_val = _to_datetime(str(row.get("date", "")))
             url = str(row.get("url", ""))
             texte = str(row.get("texte", ""))
 
+            date_str = str(row.get("date", ""))
+            try:
+                dt = datetime.fromisoformat(date_str.replace("Z", ""))
+            except ValueError:
+                dt = datetime.now()
+
             if doc_type == "Reddit":
-                nb_com = int(row.get("nb_commentaires", 0) if not pd.isna(row.get("nb_commentaires", 0)) else 0)
-                doc = RedditDocument(titre, auteur, date_val, url, texte, nb_commentaires=nb_com)
+                nb = int(row.get("nb_commentaires", 0))
+                doc = RedditDocument(titre, auteur, dt, url, texte, nb_commentaires=nb)
             elif doc_type == "Arxiv":
-                co_str = "" if pd.isna(row.get("co_auteurs", "")) else str(row.get("co_auteurs", ""))
-                co_auteurs = [x for x in co_str.split(";") if x] if co_str else []
-                doc = ArxivDocument(titre, auteur, date_val, url, texte, co_auteurs=co_auteurs)
+                co_str = str(row.get("co_auteurs", "")).strip()
+                co = co_str.split(";") if co_str else []
+                doc = ArxivDocument(titre, auteur, dt, url, texte, co_auteurs=co)
             else:
-                doc = Document(titre, auteur, date_val, url, texte)
+                doc = Document(titre, auteur, dt, url, texte)
 
             corpus.add_document(doc)
 
         return corpus
+
+    # TD6
+
+    def _build_all_text_once(self) -> str:
+        """Build the concatenated corpus text only once, and cache it."""
+        if self._all_text_cache is None:
+            # concat all docs with separators to avoid merging words
+            self._all_text_cache = "\n".join(
+                str(doc.texte) for doc in self.id2doc.values()
+            )
+        return self._all_text_cache
+
+    @staticmethod
+    def nettoyer_texte(texte: str) -> str:
+        """
+        TD6 2.1: minimal cleaning:
+        - lowercase
+        - replace \n
+        - optionally remove punctuation/digits via regex
+        """
+        t = (texte or "").lower().replace("\n", " ")
+        # remove digits
+        t = re.sub(r"\d+", " ", t)
+        # replace punctuation with spaces
+        t = re.sub(r"[^a-z\s]+", " ", t)
+        # normalize whitespace
+        t = re.sub(r"\s+", " ", t).strip()
+        return t
+
+    def search(self, keyword: str, ignore_case: bool = True) -> List[str]:
+        """
+        TD6 1.1: return passages containing the keyword, by regex.
+        Works on the concatenated string built once.
+        Returns list of matched passages (snippets).
+        """
+        if not keyword:
+            return []
+
+        text = self._build_all_text_once()
+        flags = re.IGNORECASE if ignore_case else 0
+
+        # capture a small passage around the match
+        pattern = re.compile(rf".{{0,40}}\b{re.escape(keyword)}\b.{{0,40}}", flags)
+        return pattern.findall(text)
+
+    def concorde(self, expr: str, context: int = 30, ignore_case: bool = True) -> pd.DataFrame:
+        """
+        TD6 1.2: Build a concordancer for an expression.
+        Returns a pandas DataFrame with:
+        contexte gauche | motif trouvé | contexte droit
+        """
+        if not expr:
+            return pd.DataFrame(columns=["contexte gauche", "motif trouvé", "contexte droit"])
+
+        text = self._build_all_text_once()
+        flags = re.IGNORECASE if ignore_case else 0
+        pattern = re.compile(expr, flags)
+
+        rows = []
+        for m in pattern.finditer(text):
+            start, end = m.span()
+            left = text[max(0, start - context):start]
+            mid = text[start:end]
+            right = text[end:min(len(text), end + context)]
+            rows.append({
+                "contexte gauche": left,
+                "motif trouvé": mid,
+                "contexte droit": right
+            })
+
+        return pd.DataFrame(rows, columns=["contexte gauche", "motif trouvé", "contexte droit"])
+
+    def stats(self, n: int = 20) -> pd.DataFrame:
+        """
+        TD6 2.x:
+        - number of distinct words
+        - top-n most frequent words
+        Builds a freq table using pandas.
+        Returns the freq DataFrame (sorted).
+        """
+        # Build vocabulary + counts in one pass over documents 
+        counts: Dict[str, int] = {}
+        doc_freq: Dict[str, int] = {}
+
+        for doc in self.id2doc.values():
+            cleaned = self.nettoyer_texte(doc.texte)
+            if not cleaned:
+                continue
+            tokens = cleaned.split()
+
+            # term frequency
+            for w in tokens:
+                counts[w] = counts.get(w, 0) + 1
+
+            # document frequency
+            unique = set(tokens)
+            for w in unique:
+                doc_freq[w] = doc_freq.get(w, 0) + 1
+
+        vocab_size = len(counts)
+        print(f"Nombre de mots différents dans le corpus : {vocab_size}")
+
+        freq_df = pd.DataFrame({
+            "mot": list(counts.keys()),
+            "tf": list(counts.values()),
+            "df": [doc_freq.get(w, 0) for w in counts.keys()],
+        })
+
+        freq_df = freq_df.sort_values("tf", ascending=False).reset_index(drop=True)
+
+        print(f"\nTop {n} mots les plus fréquents :")
+        print(freq_df.head(n))
+
+        return freq_df
